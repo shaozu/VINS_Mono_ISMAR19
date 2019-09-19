@@ -112,9 +112,23 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
         vector<float> err;
         cv::calcOpticalFlowPyrLK(cur_img, forw_img, cur_pts, forw_pts, status, err, cv::Size(21, 21), 3);
 
-        for (int i = 0; i < int(forw_pts.size()); i++)
-            if (status[i] && !inBorder(forw_pts[i]))
+        vector<uchar> reverse_status;
+        vector<cv::Point2f> reverse_pts = cur_pts;
+        cv::calcOpticalFlowPyrLK(forw_img, cur_img, forw_pts, reverse_pts, reverse_status, err, cv::Size(21, 21), 1, 
+            cv::TermCriteria(cv::TermCriteria::COUNT+cv::TermCriteria::EPS, 30, 0.01), cv::OPTFLOW_USE_INITIAL_FLOW);
+        
+        for (size_t i = 0; i < forw_pts.size(); ++i)
+        {
+            if (status[i] && reverse_status[i] && inBorder(forw_pts[i]) &&
+                cv::norm(cur_pts[i]-reverse_pts[i]) <= 0.5)
+                status[i] = 1;
+            else 
                 status[i] = 0;
+        }
+
+        // for (int i = 0; i < int(forw_pts.size()); i++)
+        //     if (status[i] && !inBorder(forw_pts[i]))
+        //         status[i] = 0;
         reduceVector(prev_pts, status);
         reduceVector(cur_pts, status);
         reduceVector(forw_pts, status);

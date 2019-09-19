@@ -100,11 +100,13 @@ void printStatistics(const Estimator &estimator, double t)
     last_path = estimator.Ps[WINDOW_SIZE];
     ROS_DEBUG("sum of path %f", sum_of_path);
     if (ESTIMATE_TD)
-        ROS_INFO("td %f", estimator.td);
+        ROS_DEBUG("td %f", estimator.td);
 }
 
 void pubOdometry(const Estimator &estimator, const std_msgs::Header &header)
 {
+    using Clock = std::chrono::high_resolution_clock;
+    double curr_time = std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
     if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR)
     {
         nav_msgs::Odometry odometry;
@@ -153,7 +155,7 @@ void pubOdometry(const Estimator &estimator, const std_msgs::Header &header)
         relo_path.poses.push_back(pose_stamped);
         pub_relo_path.publish(relo_path);
 
-        // write result to file
+        /* write result to file
         ofstream foutC(VINS_RESULT_PATH, ios::app);
         foutC.setf(ios::fixed, ios::floatfield);
         foutC.precision(0);
@@ -170,6 +172,30 @@ void pubOdometry(const Estimator &estimator, const std_msgs::Header &header)
               << estimator.Vs[WINDOW_SIZE].y() << ","
               << estimator.Vs[WINDOW_SIZE].z() << "," << endl;
         foutC.close();
+        */
+        
+        // write odometry result to file
+        Eigen::Quaterniond q_w_c = correct_q * Eigen::Quaterniond(estimator.ric[0]);
+        Eigen::Vector3d t_w_c = correct_t + correct_q * estimator.tic[0];
+        ofstream foutC(VINS_RESULT_PATH, ios::app);
+        foutC.setf(ios::fixed, ios::floatfield);
+        foutC.precision(10);
+        foutC << header.stamp.toSec() << " "
+              << t_w_c.x() << " "
+              << t_w_c.y() << " "
+              << t_w_c.z() << " "
+              << q_w_c.x() << " "
+              << q_w_c.y() << " "
+              << q_w_c.z() << " "
+              << q_w_c.w() << '\n';
+        foutC.close();
+
+        // write time result to file
+        ofstream foutT(VINS_RESULT_TIME, ios::app);
+        foutT.setf(ios::fixed, ios::floatfield);
+        foutT.precision(10);
+        foutT << header.stamp.toSec() << " "
+             << curr_time << '\n';
     }
 }
 

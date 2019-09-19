@@ -18,7 +18,7 @@ int ESTIMATE_EXTRINSIC;
 int ESTIMATE_TD;
 int ROLLING_SHUTTER;
 std::string EX_CALIB_RESULT_PATH;
-std::string VINS_RESULT_PATH;
+std::string VINS_RESULT_PATH, VINS_RESULT_TIME;
 std::string IMU_TOPIC;
 double ROW, COL;
 double TD, TR;
@@ -58,7 +58,8 @@ void readParameters(ros::NodeHandle &n)
 
     std::string OUTPUT_PATH;
     fsSettings["output_path"] >> OUTPUT_PATH;
-    VINS_RESULT_PATH = OUTPUT_PATH + "/vins_result_no_loop.csv";
+    VINS_RESULT_PATH = OUTPUT_PATH + "/vins_result_odometry.txt";
+    VINS_RESULT_TIME = OUTPUT_PATH + "/vins_result_time.txt";
     std::cout << "result path " << VINS_RESULT_PATH << std::endl;
 
     // create folder if not exists
