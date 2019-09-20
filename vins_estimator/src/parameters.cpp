@@ -65,8 +65,10 @@ void readParameters(ros::NodeHandle &n)
     // create folder if not exists
     FileSystemHelper::createDirectoryIfNotExists(OUTPUT_PATH.c_str());
 
-    std::ofstream fout(VINS_RESULT_PATH, std::ios::out);
-    fout.close();
+    std::ofstream fout_odo(VINS_RESULT_PATH, std::ios::out);
+    fout_odo.close();
+    std::ofstream fout_time(VINS_RESULT_TIME, std::ios::out);
+    fout_time.close();
 
     ACC_N = fsSettings["acc_n"];
     ACC_W = fsSettings["acc_w"];
