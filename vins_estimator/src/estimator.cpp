@@ -483,6 +483,144 @@ void Estimator::solveOdometry()
     }
 }
 
+void Estimator::solveOdometryPnp()
+{
+    if (frame_count < WINDOW_SIZE)
+        return;
+    if (solver_flag == NON_LINEAR)
+    {
+        TicToc t_tri;
+        f_manager.triangulate(Ps, tic, ric);
+        ROS_DEBUG("triangulation costs %f", t_tri.toc());
+        optimizationPnP();
+    }
+}
+
+void Estimator::optimizationPnP()
+{
+    ceres::Problem problem;
+    ceres::LossFunction *loss_function;
+    //loss_function = new ceres::HuberLoss(1.0);
+    loss_function = new ceres::CauchyLoss(1.0);
+    for (int i = 0; i < WINDOW_SIZE + 1; i++)
+    {
+        ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
+        problem.AddParameterBlock(para_Pose[i], SIZE_POSE, local_parameterization);
+        problem.AddParameterBlock(para_SpeedBias[i], SIZE_SPEEDBIAS);
+    }
+    for (int i = 0; i < NUM_OF_CAM; i++)
+    {
+        ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
+        problem.AddParameterBlock(para_Ex_Pose[i], SIZE_POSE, local_parameterization);
+        if (!ESTIMATE_EXTRINSIC)
+        {
+            ROS_DEBUG("fix extinsic param");
+            problem.SetParameterBlockConstant(para_Ex_Pose[i]);
+        }
+        else
+            ROS_DEBUG("estimate extinsic param");
+    }
+    if (ESTIMATE_TD)
+    {
+        problem.AddParameterBlock(para_Td[0], 1);
+        //problem.SetParameterBlockConstant(para_Td[0]);
+    }
+
+    TicToc t_whole, t_prepare;
+    vector2double();
+
+    if (last_marginalization_info)
+    {
+        // construct new marginlization_factor
+        MarginalizationFactor *marginalization_factor = new MarginalizationFactor(last_marginalization_info);
+        problem.AddResidualBlock(marginalization_factor, NULL,
+                                 last_marginalization_parameter_blocks);
+    }
+
+    for (int i = 0; i < WINDOW_SIZE; i++)
+    {
+        int j = i + 1;
+        if (pre_integrations[j]->sum_dt > 10.0)
+            continue;
+        IMUFactor* imu_factor = new IMUFactor(pre_integrations[j]);
+        problem.AddResidualBlock(imu_factor, NULL, para_Pose[i], para_SpeedBias[i], para_Pose[j], para_SpeedBias[j]);
+    }
+    int f_m_cnt = 0;
+    int feature_index = -1;
+    for (auto &it_per_id : f_manager.feature)
+    {
+        it_per_id.used_num = it_per_id.feature_per_frame.size();
+        if (!(it_per_id.used_num >= 2 && it_per_id.start_frame < WINDOW_SIZE - 2))
+            continue;
+ 
+        ++feature_index;
+
+        int imu_i = it_per_id.start_frame, imu_j = imu_i - 1;
+        
+        Vector3d pts_i = it_per_id.feature_per_frame[0].point;
+
+        for (auto &it_per_frame : it_per_id.feature_per_frame)
+        {
+            imu_j++;
+            if (imu_i == imu_j)
+            {
+                continue;
+            }
+            Vector3d pts_j = it_per_frame.point;
+            if (ESTIMATE_TD)
+            {
+                    ProjectionTdFactor *f_td = new ProjectionTdFactor(pts_i, pts_j, it_per_id.feature_per_frame[0].velocity, it_per_frame.velocity,
+                                                                     it_per_id.feature_per_frame[0].cur_td, it_per_frame.cur_td,
+                                                                     it_per_id.feature_per_frame[0].uv.y(), it_per_frame.uv.y());
+                    problem.AddResidualBlock(f_td, loss_function, para_Pose[imu_i], para_Pose[imu_j], para_Ex_Pose[0], para_Feature[feature_index], para_Td[0]);
+                    /*
+                    double **para = new double *[5];
+                    para[0] = para_Pose[imu_i];
+                    para[1] = para_Pose[imu_j];
+                    para[2] = para_Ex_Pose[0];
+                    para[3] = para_Feature[feature_index];
+                    para[4] = para_Td[0];
+                    f_td->check(para);
+                    */
+            }
+            else
+            {
+                ProjectionFactor *f = new ProjectionFactor(pts_i, pts_j);
+                problem.AddResidualBlock(f, loss_function, para_Pose[imu_i], para_Pose[imu_j], para_Ex_Pose[0], para_Feature[feature_index]);
+            }
+            f_m_cnt++;
+        }
+    }
+
+    ROS_DEBUG("visual measurement count: %d", f_m_cnt);
+    ROS_DEBUG("prepare for ceres: %f", t_prepare.toc());
+
+    ceres::Solver::Options options;
+
+    options.linear_solver_type = ceres::DENSE_SCHUR;
+    //options.num_threads = 2;
+    options.trust_region_strategy_type = ceres::DOGLEG;
+    options.max_num_iterations = NUM_ITERATIONS;
+    //options.use_explicit_schur_complement = true;
+    //options.minimizer_progress_to_stdout = true;
+    //options.use_nonmonotonic_steps = true;
+    if (marginalization_flag == MARGIN_OLD)
+        options.max_solver_time_in_seconds = SOLVER_TIME * 4.0 / 5.0;
+    else
+        options.max_solver_time_in_seconds = SOLVER_TIME;
+    TicToc t_solver;
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+    //cout << summary.BriefReport() << endl;
+    ROS_DEBUG("Iterations : %d", static_cast<int>(summary.iterations.size()));
+    ROS_DEBUG("solver costs: %f", t_solver.toc());
+
+    double2vector();
+    ROS_DEBUG("whole marginalization costs: %f", t_whole_marginalization.toc());
+    
+    ROS_DEBUG("whole time for ceres: %f", t_whole.toc());
+}
+
 void Estimator::vector2double()
 {
     for (int i = 0; i <= WINDOW_SIZE; i++)
@@ -665,7 +803,6 @@ bool Estimator::failureDetection()
     }
     return false;
 }
-
 
 void Estimator::optimization()
 {
