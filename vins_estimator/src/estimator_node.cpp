@@ -312,6 +312,11 @@ void process()
                 image[feature_id].emplace_back(camera_id,  xyz_uv_velocity);
             }
             estimator.processImage(image, img_msg->header);
+            if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR)
+            {
+                std::cout <<  img_msg->header.frame_id << estimator.Ps[WINDOW_SIZE].transpose() << '\n';
+                std::cout << "ric is \n " << estimator.ric[0] << "\n, tic is " << estimator.tic[0].transpose() << '\n';
+            }
 
             double whole_t = t_s.toc();
             printStatistics(estimator, whole_t);

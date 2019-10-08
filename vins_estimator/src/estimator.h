@@ -16,6 +16,8 @@
 #include "factor/pose_local_parameterization.h"
 #include "factor/projection_factor.h"
 #include "factor/projection_td_factor.h"
+#include "factor/pnp_factor.h"
+#include "factor/imu_pnp_factor.h"
 #include "factor/marginalization_factor.h"
 
 #include <unordered_map>
@@ -45,8 +47,10 @@ class Estimator
     void slideWindowNew();
     void slideWindowOld();
     void optimization();
+    void optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image);
     void vector2double();
     void double2vector();
+    void double2vectorPnP();
     bool failureDetection();
 
 
