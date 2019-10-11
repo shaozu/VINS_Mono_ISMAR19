@@ -148,6 +148,7 @@ void FeatureManager::setDepth(const VectorXd &x)
             continue;
 
         it_per_id.estimated_depth = 1.0 / x(++feature_index);
+        it_per_id.depth_updates.push_back(it_per_id.estimated_depth);
         //ROS_INFO("feature id %d , start_frame %d, depth %f ", it_per_id->feature_id, it_per_id-> start_frame, it_per_id->estimated_depth);
         if (it_per_id.estimated_depth < 0)
         {
@@ -207,8 +208,8 @@ void FeatureManager::triangulate(Vector3d Ps[], Vector3d tic[], Matrix3d ric[])
         if (!(it_per_id.used_num >= 2 && it_per_id.start_frame < WINDOW_SIZE - 2))
             continue;
 
-        if (it_per_id.estimated_depth > 0)
-            continue;
+        // if (it_per_id.estimated_depth > 0)
+        //     continue;
         int imu_i = it_per_id.start_frame, imu_j = imu_i - 1;
 
         ROS_ASSERT(NUM_OF_CAM == 1);
@@ -252,7 +253,7 @@ void FeatureManager::triangulate(Vector3d Ps[], Vector3d tic[], Matrix3d ric[])
         {
             it_per_id.estimated_depth = INIT_DEPTH;
         }
-
+        it_per_id.depth_updates.push_back(it_per_id.estimated_depth);
     }
 }
 

@@ -52,6 +52,7 @@ class FeaturePerId
     bool is_outlier;
     bool is_margin;
     double estimated_depth;
+    vector<double> depth_updates;
     int solve_flag; // 0 haven't solve yet; 1 solve succ; 2 solve fail;
 
     Vector3d gt_p;

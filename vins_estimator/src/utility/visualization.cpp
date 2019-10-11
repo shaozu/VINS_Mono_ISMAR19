@@ -236,7 +236,8 @@ void pubKeyPoses(const Estimator &estimator, const std_msgs::Header &header)
 
 void pubCameraPose(const Estimator &estimator, const std_msgs::Header &header)
 {
-    int idx2 = WINDOW_SIZE - 1;
+    int idx2 = WINDOW_SIZE;
+    // int idx2 = WINDOW_SIZE - 1;
 
     if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR)
     {
