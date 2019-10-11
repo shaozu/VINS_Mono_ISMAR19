@@ -48,6 +48,7 @@ class Estimator
     void slideWindowOld();
     void optimization();
     void optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image);
+    void optimizationMO(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image);
     void vector2double();
     void double2vector();
     void double2vectorPnP();
@@ -140,4 +141,6 @@ class Estimator
     Vector3d relo_relative_t;
     Quaterniond relo_relative_q;
     double relo_relative_yaw;
+
+    int num_frame;
 };

@@ -3,8 +3,7 @@
 Eigen::Matrix2d PnPFactor::sqrt_info;
 Eigen::Matrix2d PnPFactor2::sqrt_info;
 
-PnPFactor::PnPFactor(const Eigen::Vector3d &_pt_3d, const Eigen::Vector3d &_pt_2d) : 
-    pt_3d(_pt_3d), pt_2d(_pt_2d)
+PnPFactor::PnPFactor(const Eigen::Vector3d &_pt_3d, const Eigen::Vector3d &_pt_2d) : pt_3d(_pt_3d), pt_2d(_pt_2d)
 {
 #ifdef UNIT_SPHERE_ERROR
     Eigen::Vector3d b1, b2;
@@ -18,26 +17,6 @@ PnPFactor::PnPFactor(const Eigen::Vector3d &_pt_3d, const Eigen::Vector3d &_pt_2
     tangent_base.block<1, 3>(1, 0) = b2.transpose();
 #endif
 };
-
-Eigen::Matrix<double, 3, 4> PnPFactor::QuaternionDerivation(const Eigen::Quaterniond &q0, const Eigen::Vector3d &point) const
-{
-    const double *q = q0.coeffs().data();
-    Eigen::Matrix<double, 3, 4> result;
-    result(0, 0) = 2*q[1]*point[1] + 2*q[2]*point[2];
-    result(0, 1) = -2*2*q[1]*point[0] + 2*q[0]*point[1] + 2*q[3]*point[2];
-    result(0, 2) = -2*2*q[2]*point[0] - 2*q[3]*point[1] + 2*q[0]*point[2];
-    result(0, 3) = -2*q[2]*point[1] + 2*q[1]*point[2];
-    result(1, 0) = 2*q[1]*point[0] - 2*2*q[0]*point[1] - 2*q[3]*point[2];
-    result(1, 1) = 2*q[0]*point[0] + 2*q[2]*point[2];
-    result(1, 2) = 2*q[3]*point[0] - 2*2*q[2]*point[1] + 2*q[1]*point[2];
-    result(1, 3) = 2*q[2]*point[0] - 2*q[0]*point[2];
-    result(2, 0) = 2*q[2]*point[0] + 2*q[3]*point[1] - 2*2*q[0]*point[2];
-    result(2, 1) = -2*q[3]*point[0] + 2*q[2]*point[1] - 2*2*q[1]*point[2];
-    result(2, 2) = 2*q[0]*point[0] + 2*q[1]*point[1];
-    result(2, 3) = -2*q[1]*point[0] + 2*q[0]*point[1];
-
-    return result;
-}
 
 bool PnPFactor::Evaluate(double const *const *parameters, double *residuals, double **jacobians) const
 {
@@ -57,9 +36,10 @@ bool PnPFactor::Evaluate(double const *const *parameters, double *residuals, dou
 #else
     double dep_i = pt_camera_i.z();
     residual = (pt_camera_i / dep_i).head<2>() - pt_2d.head<2>();
-    // std::cout << "residual is " << residual.transpose() << '\n';
 #endif
     residual = sqrt_info * residual;
+
+    // std::cout << "residual is " << residual.transpose() << '\n';
 
     if (jacobians)
     {
@@ -82,26 +62,26 @@ bool PnPFactor::Evaluate(double const *const *parameters, double *residuals, dou
             0, 1. / dep_i, -pt_camera_i(1) / (dep_i * dep_i);
 #endif
         reduce = sqrt_info * reduce;
-        Eigen::Matrix<double, 4, 4> tmp_m = -Eigen::Matrix<double, 4, 4>::Identity();
-        tmp_m(3, 3) = 1;
 
         if (jacobians[0])
         {
             Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_pose_i(jacobians[0]);
 
-            Eigen::Matrix<double, 3, 7> jaco_i;
+            Eigen::Matrix<double, 3, 6> jaco_i;
             jaco_i.leftCols<3>() = ric.transpose() * -Ri.transpose();
-            jaco_i.rightCols<4>() = ric.transpose() * QuaternionDerivation(Qi.inverse(), pt_3d - Pi) * tmp_m;
+            jaco_i.rightCols<3>() = ric.transpose() * Utility::skewSymmetric(pt_imu_i);
 
-            jacobian_pose_i = reduce * jaco_i;
+            jacobian_pose_i.leftCols<6>() = reduce * jaco_i;
+            jacobian_pose_i.rightCols<1>().setZero();
         }
         if (jacobians[1])
         {
             Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_ex_pose(jacobians[1]);
-            Eigen::Matrix<double, 3, 7> jaco_ex;
+            Eigen::Matrix<double, 3, 6> jaco_ex;
             jaco_ex.leftCols<3>() = -ric.transpose();
-            jaco_ex.rightCols<4>() = QuaternionDerivation(qic.inverse(), pt_imu_i - tic) * tmp_m;
-            jacobian_ex_pose = reduce * jaco_ex;
+            jaco_ex.rightCols<3>() = Utility::skewSymmetric(pt_camera_i);
+            jacobian_ex_pose.leftCols<6>() = reduce * jaco_ex;
+            jacobian_ex_pose.rightCols<1>().setZero();
         }
     }
 

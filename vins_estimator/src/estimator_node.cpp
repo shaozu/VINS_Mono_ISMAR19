@@ -111,7 +111,6 @@ getMeasurements()
             sum_of_wait++;
             return measurements;
         }
-
         if (!(imu_buf.front()->header.stamp.toSec() < feature_buf.front()->header.stamp.toSec() + estimator.td))
         {
             ROS_WARN("throw img, only should happen at the beginning");
@@ -120,17 +119,19 @@ getMeasurements()
         }
         sensor_msgs::PointCloudConstPtr img_msg = feature_buf.front();
         feature_buf.pop();
-
+        
         std::vector<sensor_msgs::ImuConstPtr> IMUs;
         while (imu_buf.front()->header.stamp.toSec() < img_msg->header.stamp.toSec() + estimator.td)
         {
             IMUs.emplace_back(imu_buf.front());
             imu_buf.pop();
         }
+
         IMUs.emplace_back(imu_buf.front());
         if (IMUs.empty())
             ROS_WARN("no imu between two image");
         measurements.emplace_back(IMUs, img_msg);
+
     }
     return measurements;
 }
@@ -170,6 +171,7 @@ void feature_callback(const sensor_msgs::PointCloudConstPtr &feature_msg)
         init_feature = 1;
         return;
     }
+
     m_buf.lock();
     feature_buf.push(feature_msg);
     m_buf.unlock();
@@ -311,12 +313,13 @@ void process()
                 xyz_uv_velocity << x, y, z, p_u, p_v, velocity_x, velocity_y;
                 image[feature_id].emplace_back(camera_id,  xyz_uv_velocity);
             }
+
             estimator.processImage(image, img_msg->header);
-            if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR)
-            {
-                std::cout <<  img_msg->header.frame_id << estimator.Ps[WINDOW_SIZE].transpose() << '\n';
-                std::cout << "ric is \n " << estimator.ric[0] << "\n, tic is " << estimator.tic[0].transpose() << '\n';
-            }
+            // if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR)
+            // {
+            //     std::cout <<  img_msg->header.frame_id << estimator.Ps[WINDOW_SIZE].transpose() << '\n';
+            //     std::cout << "ric is \n " << estimator.ric[0] << "\n, tic is " << estimator.tic[0].transpose() << '\n';
+            // }
 
             double whole_t = t_s.toc();
             printStatistics(estimator, whole_t);

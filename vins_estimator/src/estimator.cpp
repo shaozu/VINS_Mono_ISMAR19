@@ -17,6 +17,7 @@ void Estimator::setParameter()
     ProjectionFactor::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
     ProjectionTdFactor::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
     PnPFactor::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
+    PnPFactor2::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
     td = TD;
 }
 
@@ -80,6 +81,7 @@ void Estimator::clearState()
 
     drift_correct_r = Matrix3d::Identity();
     drift_correct_t = Vector3d::Zero();
+    num_frame = 0;
 }
 
 void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const Vector3d &angular_velocity)
@@ -122,11 +124,16 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
 {
     // std::cout << "-------------------- " << header.frame_id << " -----------------------\n";
     ROS_DEBUG("new image coming ------------------------------------------");
-    if (header.frame_id.compare("main") != 0 && solver_flag == NON_LINEAR && frame_count == WINDOW_SIZE)
-    {
-        // inferior frame, simply do motion only PnP to speed up
-        return optimizationPnP(image);
-    }
+    std::cout << "-------- " << header.frame_id << '\n';
+    ++ num_frame;
+    // if (header.frame_id.compare("main") != 0 && solver_flag == NON_LINEAR && frame_count == WINDOW_SIZE)
+    // if (num_frame%3 != 0 && solver_flag == NON_LINEAR && frame_count == WINDOW_SIZE)
+    // {
+    //     // return;
+    //     // inferior frame, simply do motion only PnP to speed up
+    //     // return optimizationMO(image);
+    //     return optimizationPnP(image);
+    // }
 
     ROS_DEBUG("Adding feature points %lu", image.size());
     if (f_manager.addFeatureCheckParallax(frame_count, image, td))
@@ -221,6 +228,7 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
         last_P = Ps[WINDOW_SIZE];
         last_R0 = Rs[0];
         last_P0 = Ps[0];
+        // std::cout << "VINS solved result is " << last_P.transpose() << '\n';
     }
 }
 bool Estimator::initialStructure()
@@ -491,22 +499,19 @@ void Estimator::solveOdometry()
     }
 }
 
-void Estimator::optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image)
+void Estimator::optimizationMO(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image)
 {
     ceres::Problem problem;
     ceres::LossFunction *loss_function;
-    loss_function = new ceres::HuberLoss(1.0);
-    // loss_function = new ceres::CauchyLoss(1.0);
-    for (int i = WINDOW_SIZE-1; i < WINDOW_SIZE + 1; i++)
+    //loss_function = new ceres::HuberLoss(1.0);
+    loss_function = new ceres::CauchyLoss(1.0);
+    for (int i = 0; i < WINDOW_SIZE + 1; i++)
     {
         ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
         problem.AddParameterBlock(para_Pose[i], SIZE_POSE, local_parameterization);
-        // problem.AddParameterBlock(para_SpeedBias[i], 3);
-        // problem.AddParameterBlock(para_SpeedBias[i]+3, 6);
-        // problem.SetParameterBlockConstant(para_SpeedBias[i]+3);
+        problem.AddParameterBlock(para_SpeedBias[i], SIZE_SPEEDBIAS);
+        problem.SetParameterBlockConstant(para_SpeedBias[i]);
     }
-    problem.SetParameterBlockConstant(para_Pose[WINDOW_SIZE-1]);
-
     for (int i = 0; i < NUM_OF_CAM; i++)
     {
         ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
@@ -514,27 +519,116 @@ void Estimator::optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<do
         problem.SetParameterBlockConstant(para_Ex_Pose[i]);
     }
 
+    for (int i = 0; i < NUM_OF_F; ++i)
+    {
+        problem.AddParameterBlock(para_Feature[i], 1);
+        // problem.SetParameterBlockConstant(para_Feature[i]);
+    }
+
     TicToc t_whole, t_prepare;
     vector2double();
+    for (int i = 0; i < WINDOW_SIZE; i++)
+    {
+        int j = i + 1;
+        if (pre_integrations[j]->sum_dt > 10.0)
+            continue;
+        IMUFactor* imu_factor = new IMUFactor(pre_integrations[j]);
+        problem.AddResidualBlock(imu_factor, NULL, para_Pose[i], para_SpeedBias[i], para_Pose[j], para_SpeedBias[j]);
+    }
+    int f_m_cnt = 0;
+    int feature_index = -1;
+    for (auto &it_per_id : f_manager.feature)
+    {
+        it_per_id.used_num = it_per_id.feature_per_frame.size();
+        if (!(it_per_id.used_num >= 2 && it_per_id.start_frame < WINDOW_SIZE - 2))
+            continue;
+ 
+        ++feature_index;
 
-    /* printf("--------- WINDOW_SIZE-1 -----------\n");
-    for (int i = 0; i < 7; i++)
-        printf("%f ", para_Pose[WINDOW_SIZE-1][i]);
-    printf("\n");
-    printf("--------- WINDOW_SIZE -----------\n");
-    for (int i = 0; i < 7; i++)
-        printf("%f ", para_Pose[WINDOW_SIZE][i]);
-    printf("\n"); */
+        int imu_i = it_per_id.start_frame, imu_j = imu_i - 1;
+        
+        Vector3d pts_i = it_per_id.feature_per_frame[0].point;
 
-    for (int i = 0; i < 7; i++)
-        para_Pose[WINDOW_SIZE][i] = para_Pose[WINDOW_SIZE-1][i];
-    
+        for (auto &it_per_frame : it_per_id.feature_per_frame)
+        {
+            imu_j++;
+            if (imu_i == imu_j)
+            {
+                continue;
+            }
+            Vector3d pts_j = it_per_frame.point;
+            ProjectionFactor *f = new ProjectionFactor(pts_i, pts_j);
+            problem.AddResidualBlock(f, loss_function, para_Pose[imu_i], para_Pose[imu_j], 
+                para_Ex_Pose[0], para_Feature[feature_index]);
+            f_m_cnt++;
+        }
 
-    
-    IMUPnPFactor* imu_factor = new IMUPnPFactor(pre_integrations[WINDOW_SIZE]);
-    // problem.AddResidualBlock(imu_factor, NULL, para_Pose[WINDOW_SIZE-1], para_SpeedBias[WINDOW_SIZE-1], 
-    //                          para_SpeedBias[WINDOW_SIZE-1]+3, para_Pose[WINDOW_SIZE], 
-    //                          para_SpeedBias[WINDOW_SIZE], para_SpeedBias[WINDOW_SIZE]+3);
+        if (image.count(it_per_id.feature_id) != 0)
+        {
+            Vector3d pts_j = image.at(it_per_id.feature_id)[0].second.head<3>();
+            ProjectionFactor *f = new ProjectionFactor(pts_i, pts_j);
+            problem.AddResidualBlock(f, loss_function, para_Pose[imu_i], para_Pose[WINDOW_SIZE], 
+                para_Ex_Pose[0], para_Feature[feature_index]);
+            f_m_cnt++;
+        }
+    }
+
+    ROS_DEBUG("visual measurement count: %d", f_m_cnt);
+    ROS_DEBUG("prepare for ceres: %f", t_prepare.toc());
+
+    ceres::Solver::Options options;
+
+    options.linear_solver_type = ceres::DENSE_SCHUR;
+    //options.num_threads = 2;
+    options.trust_region_strategy_type = ceres::DOGLEG;
+    options.max_num_iterations = NUM_ITERATIONS;
+    // options.check_gradients = true;
+    //options.use_explicit_schur_complement = true;
+    // options.minimizer_progress_to_stdout = true;
+    //options.use_nonmonotonic_steps = true;
+    options.max_solver_time_in_seconds = SOLVER_TIME;
+    TicToc t_solver;
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+    //cout << summary.BriefReport() << endl;
+    // cout << summary.FullReport() << endl;
+    ROS_DEBUG("Iterations : %d", static_cast<int>(summary.iterations.size()));
+    ROS_DEBUG("solver costs: %f", t_solver.toc());
+    ROS_INFO("whole costs: %f", t_whole.toc());
+
+
+    VectorXd dep = f_manager.getDepthVector();
+    for (int i = 0; i < f_manager.getFeatureCount(); i++)
+    {
+        std::cout << "depth diff is " << 1.0/dep(i) - 1.0/para_Feature[i][0] << 
+        ", depth scale change is " << para_Feature[i][0]/dep(i) << '\n';
+
+    }
+    double2vector();
+}
+
+void Estimator::optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<double, 7, 1>>>> &image)
+{
+    TicToc t_whole;
+    ceres::Problem problem;
+    ceres::LossFunction *loss_function;
+    loss_function = new ceres::HuberLoss(3.0);
+    ceres::ProductParameterization *local_parameterization = new ceres::ProductParameterization(
+        new ceres::IdentityParameterization(3), 
+        new ceres::EigenQuaternionParameterization()
+    );
+    problem.AddParameterBlock(para_Pose[WINDOW_SIZE], SIZE_POSE, local_parameterization);
+
+    for (int i = 0; i < NUM_OF_CAM; i++)
+    {
+        ceres::ProductParameterization *local_parameterization = new ceres::ProductParameterization(
+            new ceres::IdentityParameterization(3), 
+            new ceres::EigenQuaternionParameterization()
+        );
+        problem.AddParameterBlock(para_Ex_Pose[i], SIZE_POSE, local_parameterization);
+        problem.SetParameterBlockConstant(para_Ex_Pose[i]);
+    }
+    vector2double();
 
     int f_m_cnt = 0;
     for (auto &it_per_id : f_manager.feature)
@@ -543,36 +637,51 @@ void Estimator::optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<do
             continue;
         
         it_per_id.used_num = it_per_id.feature_per_frame.size();
-        if (!(it_per_id.used_num >= 2 && it_per_id.start_frame < WINDOW_SIZE - 2))
+        if (!(it_per_id.used_num >= 3 && it_per_id.start_frame < WINDOW_SIZE - 3))
             continue;
         
-        if (it_per_id.start_frame > WINDOW_SIZE * 4.0 / 4.0 || it_per_id.solve_flag != 1)
+        if (it_per_id.start_frame > WINDOW_SIZE * 3.0 / 4.0 || it_per_id.solve_flag != 1)
             continue;
 
-        int imu_i = it_per_id.start_frame;
+        int num_dep_updates = it_per_id.depth_updates.size();
+        if (num_dep_updates < 3)    continue;
+        double avg_dep = 0, var_dep = 0;
+        for (int i = num_dep_updates-3; i < num_dep_updates; ++i)
+                avg_dep += it_per_id.depth_updates[i];
+        avg_dep /= 3;
+        for (int i = num_dep_updates-3; i < num_dep_updates; ++i)
+                var_dep += (it_per_id.depth_updates[i]-avg_dep)*(it_per_id.depth_updates[i]-avg_dep);
+        var_dep = sqrt(var_dep / 3);
         
+
+        // std::cout << "track num is " << it_per_id.used_num << ", var is " << var_dep << '\n';
+        // if (var_dep > 0.05) continue;
+        if (it_per_id.used_num > 9) continue;
+        int imu_i = it_per_id.start_frame;
+
         Vector3d pts_i = it_per_id.feature_per_frame[0].point;
         Eigen::Vector3d pt_3d_c = pts_i * it_per_id.estimated_depth;
         Eigen::Vector3d pt_3d_i = ric[0] * pt_3d_c + tic[0];
         Eigen::Vector3d pt_3d_w = Rs[imu_i] * pt_3d_i + Ps[imu_i];
 
         Eigen::Vector3d pt_2d = image.at(it_per_id.feature_id)[0].second.head<3>();
+        // ceres::CostFunction *f = PnPFactor2::create(pt_3d_w, pt_2d);
         PnPFactor *f = new PnPFactor(pt_3d_w, pt_2d);
         problem.AddResidualBlock(f, loss_function, para_Pose[WINDOW_SIZE], para_Ex_Pose[0]);
         f_m_cnt++;
     }
 
     ROS_DEBUG("visual measurement count: %d", f_m_cnt);
-    ROS_DEBUG("prepare for ceres: %f", t_prepare.toc());
-    ROS_INFO("new frame PnP measurement count: %d", f_m_cnt);
+    // ROS_INFO("new frame PnP measurement count: %d", f_m_cnt);
     ceres::Solver::Options options;
-
     options.linear_solver_type = ceres::DENSE_SCHUR;
     //options.num_threads = 2;
     options.trust_region_strategy_type = ceres::DOGLEG;
     options.max_num_iterations = NUM_ITERATIONS;
+    // options.check_gradients = true;
+    options.gradient_check_relative_precision = 1e-6;
     //options.use_explicit_schur_complement = true;
-    //options.minimizer_progress_to_stdout = true;
+    // options.minimizer_progress_to_stdout = true;
     //options.use_nonmonotonic_steps = true;
     options.max_solver_time_in_seconds = SOLVER_TIME;
     TicToc t_solver;
@@ -581,10 +690,17 @@ void Estimator::optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<do
     // cout << summary.FullReport() << endl;
     ROS_DEBUG("Iterations : %d", static_cast<int>(summary.iterations.size()));
     ROS_DEBUG("solver costs: %f", t_solver.toc());
-    // assert(false);
-
-    double2vectorPnP();
     ROS_DEBUG("whole time for ceres: %f", t_whole.toc());
+
+    // std::cout << "before update, Pi is " << Ps[WINDOW_SIZE].transpose() << '\n';
+    // std::cout << "before update, Ri is \n" << Rs[WINDOW_SIZE] << '\n';
+    // double2vectorPnP();
+    Ps[WINDOW_SIZE] = Eigen::Vector3d(para_Pose[WINDOW_SIZE][0], para_Pose[WINDOW_SIZE][1], para_Pose[WINDOW_SIZE][2]);
+    Eigen::Quaterniond tmp_Q(para_Pose[WINDOW_SIZE][6], para_Pose[WINDOW_SIZE][3], 
+        para_Pose[WINDOW_SIZE][4], para_Pose[WINDOW_SIZE][5]);
+    Rs[WINDOW_SIZE] = tmp_Q.toRotationMatrix();
+    // std::cout << "after update, Pi is " << Ps[WINDOW_SIZE].transpose() << '\n';
+    // std::cout << "after update, Ri is \n" << Rs[WINDOW_SIZE] << '\n';
 }
 
 void Estimator::vector2double()
@@ -647,7 +763,6 @@ void Estimator::double2vector()
                                                       para_Pose[0][4],
                                                       para_Pose[0][5]).toRotationMatrix());
     double y_diff = origin_R0.x() - origin_R00.x();
-    std::cout << "y_diff is " << y_diff << '\n';
     //TODO
     Matrix3d rot_diff = Utility::ypr2R(Vector3d(y_diff, 0, 0));
     if (abs(abs(origin_R0.y()) - 90) < 1.0 || abs(abs(origin_R00.y()) - 90) < 1.0)
@@ -692,9 +807,14 @@ void Estimator::double2vector()
                              para_Ex_Pose[i][5]).toRotationMatrix();
     }
 
+    double sum_change = 0;
     VectorXd dep = f_manager.getDepthVector();
     for (int i = 0; i < f_manager.getFeatureCount(); i++)
+    {
+        sum_change += abs(1.0/dep(i) - 1.0/para_Feature[i][0]);
+        // std::cout << "depth change is " << abs(1.0/dep(i) - 1.0/para_Feature[i][0]) << '\n';
         dep(i) = para_Feature[i][0];
+    }
     f_manager.setDepth(dep);
     if (ESTIMATE_TD)
         td = para_Td[0][0];
@@ -725,7 +845,7 @@ void Estimator::double2vector()
 
 void Estimator::double2vectorPnP()
 {
-    for (int i = WINDOW_SIZE-1; i <= WINDOW_SIZE; i++)
+    for (int i = WINDOW_SIZE; i <= WINDOW_SIZE; i++)
     {
 
         Rs[i] = Quaterniond(para_Pose[i][6], para_Pose[i][3], para_Pose[i][4], para_Pose[i][5]).normalized().toRotationMatrix();
@@ -833,8 +953,20 @@ void Estimator::optimization()
         //problem.SetParameterBlockConstant(para_Td[0]);
     }
 
+    if (num_frame%3 != 0 && solver_flag == NON_LINEAR && frame_count == WINDOW_SIZE)
+    {
+        for (int i = 0; i < NUM_OF_F; ++i)
+        {
+            problem.AddParameterBlock(para_Feature[i], 1);
+            problem.SetParameterBlockConstant(para_Feature[i]);
+        }
+    }
+
     TicToc t_whole, t_prepare;
     vector2double();
+    // for (int i = 0; i < 7; ++i)
+    //     para_Pose[WINDOW_SIZE][i] = 0;
+    // para_Pose[WINDOW_SIZE][6] = 1;
 
     if (last_marginalization_info)
     {
@@ -942,8 +1074,9 @@ void Estimator::optimization()
     //options.num_threads = 2;
     options.trust_region_strategy_type = ceres::DOGLEG;
     options.max_num_iterations = NUM_ITERATIONS;
+    // options.check_gradients = true;
     //options.use_explicit_schur_complement = true;
-    //options.minimizer_progress_to_stdout = true;
+    // options.minimizer_progress_to_stdout = true;
     //options.use_nonmonotonic_steps = true;
     if (marginalization_flag == MARGIN_OLD)
         options.max_solver_time_in_seconds = SOLVER_TIME * 4.0 / 5.0;
@@ -953,6 +1086,7 @@ void Estimator::optimization()
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
     //cout << summary.BriefReport() << endl;
+    // cout << summary.FullReport() << endl;
     ROS_DEBUG("Iterations : %d", static_cast<int>(summary.iterations.size()));
     ROS_DEBUG("solver costs: %f", t_solver.toc());
 
