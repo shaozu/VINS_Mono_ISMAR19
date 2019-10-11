@@ -81,7 +81,6 @@ void Estimator::clearState()
 
     drift_correct_r = Matrix3d::Identity();
     drift_correct_t = Vector3d::Zero();
-    num_frame = 0;
 }
 
 void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const Vector3d &angular_velocity)
@@ -124,16 +123,11 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
 {
     // std::cout << "-------------------- " << header.frame_id << " -----------------------\n";
     ROS_DEBUG("new image coming ------------------------------------------");
-    std::cout << "-------- " << header.frame_id << '\n';
-    ++ num_frame;
-    // if (header.frame_id.compare("main") != 0 && solver_flag == NON_LINEAR && frame_count == WINDOW_SIZE)
-    // if (num_frame%3 != 0 && solver_flag == NON_LINEAR && frame_count == WINDOW_SIZE)
-    // {
-    //     // return;
-    //     // inferior frame, simply do motion only PnP to speed up
-    //     // return optimizationMO(image);
-    //     return optimizationPnP(image);
-    // }
+    if (header.frame_id.compare("main") != 0 && solver_flag == NON_LINEAR && frame_count == WINDOW_SIZE)
+    {
+        // inferior frame, simply do motion only PnP to speed up
+        return optimizationPnP(image);
+    }
 
     ROS_DEBUG("Adding feature points %lu", image.size());
     if (f_manager.addFeatureCheckParallax(frame_count, image, td))
@@ -652,11 +646,10 @@ void Estimator::optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<do
         for (int i = num_dep_updates-3; i < num_dep_updates; ++i)
                 var_dep += (it_per_id.depth_updates[i]-avg_dep)*(it_per_id.depth_updates[i]-avg_dep);
         var_dep = sqrt(var_dep / 3);
-        
+
+        if (var_dep > 1e-3) continue;
 
         // std::cout << "track num is " << it_per_id.used_num << ", var is " << var_dep << '\n';
-        // if (var_dep > 0.05) continue;
-        if (it_per_id.used_num > 9) continue;
         int imu_i = it_per_id.start_frame;
 
         Vector3d pts_i = it_per_id.feature_per_frame[0].point;
@@ -678,8 +671,6 @@ void Estimator::optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<do
     //options.num_threads = 2;
     options.trust_region_strategy_type = ceres::DOGLEG;
     options.max_num_iterations = NUM_ITERATIONS;
-    // options.check_gradients = true;
-    options.gradient_check_relative_precision = 1e-6;
     //options.use_explicit_schur_complement = true;
     // options.minimizer_progress_to_stdout = true;
     //options.use_nonmonotonic_steps = true;
@@ -692,15 +683,7 @@ void Estimator::optimizationPnP(const map<int, vector<pair<int, Eigen::Matrix<do
     ROS_DEBUG("solver costs: %f", t_solver.toc());
     ROS_DEBUG("whole time for ceres: %f", t_whole.toc());
 
-    // std::cout << "before update, Pi is " << Ps[WINDOW_SIZE].transpose() << '\n';
-    // std::cout << "before update, Ri is \n" << Rs[WINDOW_SIZE] << '\n';
     // double2vectorPnP();
-    Ps[WINDOW_SIZE] = Eigen::Vector3d(para_Pose[WINDOW_SIZE][0], para_Pose[WINDOW_SIZE][1], para_Pose[WINDOW_SIZE][2]);
-    Eigen::Quaterniond tmp_Q(para_Pose[WINDOW_SIZE][6], para_Pose[WINDOW_SIZE][3], 
-        para_Pose[WINDOW_SIZE][4], para_Pose[WINDOW_SIZE][5]);
-    Rs[WINDOW_SIZE] = tmp_Q.toRotationMatrix();
-    // std::cout << "after update, Pi is " << Ps[WINDOW_SIZE].transpose() << '\n';
-    // std::cout << "after update, Ri is \n" << Rs[WINDOW_SIZE] << '\n';
 }
 
 void Estimator::vector2double()
@@ -951,15 +934,6 @@ void Estimator::optimization()
     {
         problem.AddParameterBlock(para_Td[0], 1);
         //problem.SetParameterBlockConstant(para_Td[0]);
-    }
-
-    if (num_frame%3 != 0 && solver_flag == NON_LINEAR && frame_count == WINDOW_SIZE)
-    {
-        for (int i = 0; i < NUM_OF_F; ++i)
-        {
-            problem.AddParameterBlock(para_Feature[i], 1);
-            problem.SetParameterBlockConstant(para_Feature[i]);
-        }
     }
 
     TicToc t_whole, t_prepare;
